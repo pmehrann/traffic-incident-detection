@@ -1,0 +1,168 @@
+import numpy as np
+from numpy import savetxt
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn import preprocessing
+from sklearn.decomposition import PCA
+from keras.models import Model, Sequential
+from keras.utils import to_categorical
+from keras.layers import Bidirectional, LSTM, Dropout, Dense, Input, TimeDistributed, Conv1D, MaxPooling1D, Flatten
+from keras.optimizers import adam, adadelta, SGD
+from imblearn.over_sampling import SMOTE, SVMSMOTE
+from imblearn.combine import SMOTEENN, SMOTETomek
+
+# load data
+dataset = pd.read_csv('dataset.csv', index_col=[0], header=[0,1])
+list(dataset.columns.values)
+# separate labels and features and extract indexes of accidents
+labels = dataset['labels']
+labels = np.array(labels)
+labels = labels.reshape(len(labels))
+features = dataset.drop(columns='labels')
+
+print('Number of samples in dataset:', features.shape[0])
+print('Number of features in dataset: {}\n'.format(features.shape[1]))
+print('Number of non-crash data before oversampling:', sum(labels == 0))
+print('Number of crash data before oversampling: {}\n'.format(sum(labels == 1)))
+
+
+# normalize data
+scalar = preprocessing.StandardScaler()
+features = scalar.fit_transform(features)
+
+# split the dataset
+x_train, x_test, y_train, y_test = train_test_split(features, labels, test_size=0.2)
+
+# oversampling crash data
+sm = SMOTEENN()
+x_train_res, y_train_res = sm.fit_sample(x_train, y_train.ravel())
+print("Number of non-crash data after oversampling:", sum(y_train_res == 0))
+print("Number of crash data after oversampling:", sum(y_train_res == 1))
+
+# apply PCA to visualize feature space
+plt.figure(1)
+pca = PCA(n_components=2)
+x_train_pca = pca.fit_transform(x_train)
+crash = x_train_pca[y_train == 1]
+non_crash = x_train_pca[y_train == 0]
+plt.scatter(crash[:,0],crash[:,1])
+plt.scatter(non_crash[:,0],non_crash[:,1],c='r')
+plt.title('Feature space before resampling')
+plt.legend(['crash', 'non_crash'])
+plt.show()
+
+plt.figure(2)
+pca = PCA(n_components=2)
+x_train_res_pca = pca.fit_transform(x_train_res)
+crash = x_train_res_pca[y_train_res == 1]
+non_crash = x_train_res_pca[y_train_res == 0]
+plt.scatter(crash[:,0],crash[:,1])
+plt.scatter(non_crash[:,0],non_crash[:,1],c='r')
+plt.title('Feature space after resampling')
+plt.legend(['crash', 'non_crash'])
+plt.show()
+
+# Create time series
+len_series = 6
+x_dataset = []
+y_dataset = []
+for i in range(len(x_train_res)-len_series):
+    x_dataset.append(x_train_res[i:i+len_series, :])
+    y_dataset.append(y_train_res[i + len_series])
+
+x_dataset = np.array(x_dataset)
+y_dataset = np.array(y_dataset)
+
+x_dataset_test = []
+y_dataset_test = []
+for i in range(len(x_test)-len_series):
+    x_dataset_test.append(x_test[i:i+len_series, :])
+    y_dataset_test.append(y_test[i + len_series])
+
+x_dataset_test = np.array(x_dataset_test)
+y_dataset_test = np.array(y_dataset_test)
+
+# build the model
+model = Sequential()
+model.add(LSTM(50, return_sequences=True, input_shape=(x_dataset.shape[1],x_dataset.shape[2])))
+model.add(LSTM(10))
+model.add(Dropout(0.4))
+model.add(Dense(100, activation='tanh'))
+model.add(Dense(1, activation='sigmoid'))
+
+# Compile the model
+model.compile(optimizer=adam(lr=0.001), loss='binary_crossentropy', metrics=['binary_accuracy'])
+model.summary()
+
+# fit model
+trained_model = model.fit(x_dataset, y_dataset, epochs=10, batch_size=32, validation_data=(x_dataset_test,y_dataset_test))
+
+score = model.evaluate(x_dataset_test,y_dataset_test)
+
+print("Test loss:", score[0])
+print("Test accuracy:", score[1])
+
+# plot
+plt.figure(3)
+plt.plot(trained_model.history['binary_accuracy'], linewidth=3)
+plt.plot(trained_model.history['val_binary_accuracy'], linewidth=3)
+plt.plot(trained_model.history['loss'], linewidth=3)
+plt.plot(trained_model.history['val_loss'], linewidth=3)
+plt.ylabel('Loss & Accuracy')
+plt.xlabel('Epochs')
+plt.legend(['acc', 'val_acc', 'loss', 'val_loss'], loc=10)
+plt.grid(color='b', linestyle='--', linewidth=0.5)
+plt.show()
+
+predicted_y = model.predict(x_dataset_test)
+predicted_crash = np.around(predicted_y)
+
+# plot predicted crash for test data
+plt.figure(4)
+plt.scatter(range(len(predicted_crash)),predicted_crash)
+plt.scatter(range(len(predicted_crash)),y_dataset_test, c='r')
+plt.legend(['predicted', 'real'])
+plt.show()
+
+#-------------------------------------------------------------------
+# load outbound data
+dataset2 = pd.read_csv('dataset-otherband-datesremoved-timesremoved.csv', index_col=[0], header=[0,1])
+list(dataset2.columns.values)
+# separate labels and features and extract indexes of accidents
+labels2 = dataset2['label']
+labels2 = np.array(labels2)
+labels2 = labels2.reshape(len(labels2))
+features2 = dataset2.drop(columns='label')
+
+# normalize outbound data
+features2 = scalar.fit_transform(features2)
+
+# split the outbound dataset
+x_train2, x_test2, y_train2, y_test2 = train_test_split(features2, labels2, test_size=0.9)
+print("Number of non-crash data for outbound:", sum(y_test2 == 0))
+print("Number of crash data for outbound:", sum(y_test2 == 1))
+
+x_dataset_test2 = []
+y_dataset_test2 = []
+for i in range(len(x_test2)-len_series):
+    x_dataset_test2.append(x_test2[i:i+len_series, :])
+    y_dataset_test2.append(y_test2[i + len_series])
+
+x_dataset_test2 = np.array(x_dataset_test2)
+y_dataset_test2 = np.array(y_dataset_test2)
+
+score2 = model.evaluate(x_dataset_test2,y_dataset_test2)
+
+print("Test loss for outbound:", score2[0])
+print("Test accuracy for outbound:", score2[1])
+
+predicted_y2 = model.predict(x_dataset_test2)
+predicted_crash2 = np.around(predicted_y2)
+
+# plot predicted crash for test data
+plt.figure(5)
+plt.scatter(range(len(predicted_crash2)),predicted_crash2)
+plt.scatter(range(len(predicted_crash2)),y_dataset_test2, c='r')
+plt.legend(['predicted', 'real'])
+plt.show()
